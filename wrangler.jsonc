@@ -7,10 +7,14 @@
   "main": "src/index.js",
   "compatibility_date": "2026-06-01",
 
-  "r2_buckets": [
+  // Workers KV — enabled by default on every account (unlike R2, which needs
+  // dashboard activation), so anyone can fork + deploy a mirror with zero setup.
+  // Create your own namespace with `npx wrangler kv namespace create FEED` and
+  // paste its id here.
+  "kv_namespaces": [
     {
       "binding": "FEED",
-      "bucket_name": "hex-stats-feed"
+      "id": "c5270685fac047ba8e117f7fc9f5af37"
     }
   ],
 

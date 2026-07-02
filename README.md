@@ -34,9 +34,11 @@ No API keys, no database server, no paid services.
 ## Deploy your own mirror
 
 1. **Prereqs**: a free Cloudflare account, Node 18+, `npm i` in this repo.
-2. **Create the R2 bucket** (first 10 GB free):
+2. **Create the KV namespace** (Workers KV is enabled on every account, no
+   activation or card needed), then paste the printed `id` into
+   `wrangler.jsonc` under `kv_namespaces`:
    ```sh
-   npx wrangler r2 bucket create hex-stats-feed
+   npx wrangler kv namespace create FEED
    ```
 3. **Deploy the Worker**:
    ```sh
@@ -51,7 +53,7 @@ No API keys, no database server, no paid services.
    curl -X POST -H "Authorization: Bearer <token>" \
      "https://hex-stats.<you>.workers.dev/admin/backfill?chain=pulsechain"
    ```
-   (Or run `npm run backfill` locally and upload with `wrangler r2 object put`,
+   (Or run `npm run backfill` locally and upload with `wrangler kv key put`,
    see `scripts/backfill.mjs` for details. Use `--source` to backfill from
    another mirror instead of hexstats.today.)
 6. Done. The hourly cron appends each new day automatically. Verify with:
@@ -81,9 +83,11 @@ whatever was backfilled. Contributions welcome.
 
 ## Costs
 
-Free. Workers free tier (100k req/day), R2 free tier (10 GB storage, no
-egress fees), cron triggers included. The feed blob is ~5 MB; the daily
-append never parses it (string prepend), so CPU stays well under limits.
+Free. Workers free tier (100k req/day), Workers KV free tier (1 GB storage,
+100k reads/day, 1k writes/day — the mirror stores ~10 MB and writes ~2/day),
+cron triggers included. The feed blob is ~5 MB; the daily append never parses
+it (string prepend), so CPU stays well under limits. KV was chosen over R2
+because it needs no account activation, so anyone can fork and deploy.
 
 ## License
 

@@ -4,7 +4,8 @@
 // PulseChain feed fresh by collecting each newly completed HEX day straight
 // from public subgraphs (see src/collector.js).
 //
-// Storage layout (R2 bucket `FEED`):
+// Storage layout (Workers KV namespace `FEED` — KV is enabled on every
+// account by default, so forks deploy with zero account setup):
 //   fulldatapulsechain.json   PulseChain daily records, newest-first JSON array
 //   fulldata.json             Ethereum daily records (backfill only for now)
 //   meta-pulsechain.json      { lastDay, updatedAt, prev } small state object
@@ -32,9 +33,8 @@ function json(obj, status = 200, extra = {}) {
 }
 
 async function readMeta(env) {
-  const obj = await env.FEED.get(PULSECHAIN_META);
-  if (!obj) return { lastDay: 0, updatedAt: null, prev: null };
-  return await obj.json();
+  const meta = await env.FEED.get(PULSECHAIN_META, { type: "json" });
+  return meta ?? { lastDay: 0, updatedAt: null, prev: null };
 }
 
 /// Append one newly completed day to the PulseChain feed (if there is one).
@@ -48,10 +48,9 @@ async function runCollection(env) {
   const recordJson = JSON.stringify(result.record);
 
   // Prepend to the newest-first array without parsing the whole blob.
-  const existing = await env.FEED.get(PULSECHAIN_FEED);
+  const text = await env.FEED.get(PULSECHAIN_FEED, { type: "text" });
   let body;
-  if (existing) {
-    const text = await existing.text();
+  if (text) {
     const trimmed = text.trimStart();
     if (!trimmed.startsWith("[")) throw new Error("stored feed is not a JSON array");
     const inner = trimmed.slice(1).trimStart();
@@ -62,32 +61,28 @@ async function runCollection(env) {
     body = `[${recordJson}]`;
   }
 
-  await env.FEED.put(PULSECHAIN_FEED, body, {
-    httpMetadata: { contentType: "application/json" },
-  });
+  await env.FEED.put(PULSECHAIN_FEED, body);
 
   const newMeta = {
     lastDay: result.day,
     updatedAt: new Date().toISOString(),
     prev: result.record,
   };
-  await env.FEED.put(PULSECHAIN_META, JSON.stringify(newMeta), {
-    httpMetadata: { contentType: "application/json" },
-  });
+  await env.FEED.put(PULSECHAIN_META, JSON.stringify(newMeta));
 
   return { appended: true, lastDay: result.day, record: result.record };
 }
 
 /// Serve a stored feed blob as a streamed response (no parsing).
 async function serveFeed(env, key) {
-  const obj = await env.FEED.get(key);
-  if (!obj) {
+  const stream = await env.FEED.get(key, { type: "stream" });
+  if (!stream) {
     return json(
       { error: `${key} not populated yet — run the backfill (see README)` },
       404
     );
   }
-  return new Response(obj.body, {
+  return new Response(stream, {
     headers: {
       "Content-Type": "application/json",
       "Cache-Control": "public, max-age=300",
@@ -96,7 +91,7 @@ async function serveFeed(env, key) {
   });
 }
 
-/// Backfill: copy an upstream feed's bytes into R2 and derive meta from the
+/// Backfill: copy an upstream feed's bytes into KV and derive meta from the
 /// head of the array (feeds are newest-first). No full parse.
 async function backfill(env, chain, sourceUrl) {
   const res = await fetch(sourceUrl, {
@@ -129,9 +124,7 @@ async function backfill(env, chain, sourceUrl) {
   }
 
   const feedKey = chain === "ethereum" ? ETHEREUM_FEED : PULSECHAIN_FEED;
-  await env.FEED.put(feedKey, buf, {
-    httpMetadata: { contentType: "application/json" },
-  });
+  await env.FEED.put(feedKey, buf);
 
   if (chain !== "ethereum") {
     await env.FEED.put(
@@ -140,8 +133,7 @@ async function backfill(env, chain, sourceUrl) {
         lastDay: first.currentDay,
         updatedAt: new Date().toISOString(),
         prev: first,
-      }),
-      { httpMetadata: { contentType: "application/json" } }
+      })
     );
   }
 

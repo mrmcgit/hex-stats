@@ -6,9 +6,9 @@
 //   data/fulldatapulsechain.json  (or data/fulldata.json for --chain ethereum)
 //   data/meta-pulsechain.json     (collector state, pulsechain only)
 //
-// Upload the results to the Worker's R2 bucket with:
-//   wrangler r2 object put hex-stats-feed/fulldatapulsechain.json --file data/fulldatapulsechain.json --content-type application/json --remote
-//   wrangler r2 object put hex-stats-feed/meta-pulsechain.json --file data/meta-pulsechain.json --content-type application/json --remote
+// Upload the results to the Worker's KV namespace with:
+//   wrangler kv key put fulldatapulsechain.json --binding FEED --path data/fulldatapulsechain.json --remote
+//   wrangler kv key put meta-pulsechain.json --binding FEED --path data/meta-pulsechain.json --remote
 //
 // Or, once the Worker is deployed with an ADMIN_TOKEN, skip this script and:
 //   curl -X POST -H "Authorization: Bearer $TOKEN" "https://<worker>/admin/backfill?chain=pulsechain"
