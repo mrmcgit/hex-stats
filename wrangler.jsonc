@@ -1,16 +1,16 @@
 {
-  // hexdailystats-mirror — independent Cloudflare Worker mirror of the
+  // hex-stats — independent Cloudflare Worker mirror of the
   // hexstats.today HEX daily-stats feed (https://github.com/togosh/hexdailystats).
   // Backfills history from an existing feed, then keeps itself fresh by
   // collecting each new day directly from public subgraphs.
-  "name": "hexdailystats-mirror",
+  "name": "hex-stats",
   "main": "src/index.js",
   "compatibility_date": "2026-06-01",
 
   "r2_buckets": [
     {
       "binding": "FEED",
-      "bucket_name": "hexdailystats-feed"
+      "bucket_name": "hex-stats-feed"
     }
   ],
 

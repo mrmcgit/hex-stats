@@ -1,5 +1,5 @@
 {
-  "name": "hexdailystats-mirror",
+  "name": "hex-stats",
   "version": "1.0.0",
   "description": "Cloudflare Worker mirror of the hexstats.today HEX daily-stats feed, with an independent PulseChain collector",
   "type": "module",

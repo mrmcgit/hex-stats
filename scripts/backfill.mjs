@@ -7,8 +7,8 @@
 //   data/meta-pulsechain.json     (collector state, pulsechain only)
 //
 // Upload the results to the Worker's R2 bucket with:
-//   wrangler r2 object put hexdailystats-feed/fulldatapulsechain.json --file data/fulldatapulsechain.json --content-type application/json --remote
-//   wrangler r2 object put hexdailystats-feed/meta-pulsechain.json --file data/meta-pulsechain.json --content-type application/json --remote
+//   wrangler r2 object put hex-stats-feed/fulldatapulsechain.json --file data/fulldatapulsechain.json --content-type application/json --remote
+//   wrangler r2 object put hex-stats-feed/meta-pulsechain.json --file data/meta-pulsechain.json --content-type application/json --remote
 //
 // Or, once the Worker is deployed with an ADMIN_TOKEN, skip this script and:
 //   curl -X POST -H "Authorization: Bearer $TOKEN" "https://<worker>/admin/backfill?chain=pulsechain"
@@ -31,7 +31,7 @@ const source =
 
 console.log(`Fetching ${source} ...`);
 const res = await fetch(source, {
-  headers: { "User-Agent": "hexdailystats-mirror-backfill/1.0" },
+  headers: { "User-Agent": "hex-stats-backfill/1.0" },
 });
 if (!res.ok) {
   console.error(`Upstream returned HTTP ${res.status}`);

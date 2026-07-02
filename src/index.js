@@ -1,4 +1,4 @@
-// hexdailystats-mirror — Cloudflare Worker
+// hex-stats — Cloudflare Worker
 //
 // Serves a mirror of the hexstats.today HEX daily-stats feed and keeps the
 // PulseChain feed fresh by collecting each newly completed HEX day straight
@@ -100,7 +100,7 @@ async function serveFeed(env, key) {
 /// head of the array (feeds are newest-first). No full parse.
 async function backfill(env, chain, sourceUrl) {
   const res = await fetch(sourceUrl, {
-    headers: { "User-Agent": "hexdailystats-mirror/1.0" },
+    headers: { "User-Agent": "hex-stats/1.0" },
   });
   if (!res.ok) return json({ error: `upstream HTTP ${res.status}` }, 502);
   const buf = await res.arrayBuffer();
@@ -187,7 +187,7 @@ export default {
       if (path === "/" || path === "/health") {
         const meta = await readMeta(env);
         return json({
-          service: "hexdailystats-mirror",
+          service: "hex-stats",
           chain: "pulsechain",
           lastDay: meta.lastDay,
           updatedAt: meta.updatedAt,

@@ -1,4 +1,4 @@
-# hexdailystats-mirror
+# hex-stats
 
 A Cloudflare Worker that mirrors the [hexstats.today](https://hexstats.today) HEX
 daily-stats feed and keeps the **PulseChain** feed fresh on its own, by
@@ -36,7 +36,7 @@ No API keys, no database server, no paid services.
 1. **Prereqs**: a free Cloudflare account, Node 18+, `npm i` in this repo.
 2. **Create the R2 bucket** (first 10 GB free):
    ```sh
-   npx wrangler r2 bucket create hexdailystats-feed
+   npx wrangler r2 bucket create hex-stats-feed
    ```
 3. **Deploy the Worker**:
    ```sh
@@ -49,14 +49,14 @@ No API keys, no database server, no paid services.
 5. **Backfill history** from a live feed:
    ```sh
    curl -X POST -H "Authorization: Bearer <token>" \
-     "https://hexdailystats-mirror.<you>.workers.dev/admin/backfill?chain=pulsechain"
+     "https://hex-stats.<you>.workers.dev/admin/backfill?chain=pulsechain"
    ```
    (Or run `npm run backfill` locally and upload with `wrangler r2 object put`,
    see `scripts/backfill.mjs` for details. Use `--source` to backfill from
    another mirror instead of hexstats.today.)
 6. Done. The hourly cron appends each new day automatically. Verify with:
    ```sh
-   curl https://hexdailystats-mirror.<you>.workers.dev/health
+   curl https://hex-stats.<you>.workers.dev/health
    ```
 
 ## How freshness works
