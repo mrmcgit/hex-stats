@@ -9,6 +9,9 @@ data collector is [togosh/hexdailystats](https://github.com/togosh/hexdailystats
 this project ports its PulseChain daily-stat pipeline to a serverless Worker
 that fits entirely inside Cloudflare's free tier.
 
+**Live instance:** https://hexstats.chingching.xyz/fulldatapulsechain
+(also at https://hex-stats.royal-sunset-4908.workers.dev)
+
 ## Why
 
 Many PulseChain apps consume the hexstats.today JSON feed. It is hosted by one

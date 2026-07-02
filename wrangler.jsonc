@@ -7,6 +7,14 @@
   "main": "src/index.js",
   "compatibility_date": "2026-06-01",
 
+  // Branded URL (remove or change this block when deploying your own fork —
+  // without it the Worker just serves on its *.workers.dev URL).
+  "routes": [
+    { "pattern": "hexstats.chingching.xyz", "custom_domain": true }
+  ],
+  // Keep the *.workers.dev URL serving too (fallback if the domain moves).
+  "workers_dev": true,
+
   // Workers KV — enabled by default on every account (unlike R2, which needs
   // dashboard activation), so anyone can fork + deploy a mirror with zero setup.
   // Create your own namespace with `npx wrangler kv namespace create FEED` and
