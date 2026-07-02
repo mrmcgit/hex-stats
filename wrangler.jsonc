@@ -1,0 +1,29 @@
+{
+  // hexdailystats-mirror — independent Cloudflare Worker mirror of the
+  // hexstats.today HEX daily-stats feed (https://github.com/togosh/hexdailystats).
+  // Backfills history from an existing feed, then keeps itself fresh by
+  // collecting each new day directly from public subgraphs.
+  "name": "hexdailystats-mirror",
+  "main": "src/index.js",
+  "compatibility_date": "2026-06-01",
+
+  "r2_buckets": [
+    {
+      "binding": "FEED",
+      "bucket_name": "hexdailystats-feed"
+    }
+  ],
+
+  "triggers": {
+    // Hourly at :15 — no-ops cheaply unless a new HEX day has completed.
+    // (Upstream records land shortly after 00:00 UTC.)
+    "crons": ["15 * * * *"]
+  },
+
+  "observability": {
+    "enabled": true
+  }
+
+  // Secrets (set with `wrangler secret put`):
+  //   ADMIN_TOKEN — bearer token guarding /admin/* endpoints (backfill, collect-now)
+}

@@ -1,0 +1,16 @@
+{
+  "name": "hexdailystats-mirror",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker mirror of the hexstats.today HEX daily-stats feed, with an independent PulseChain collector",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "backfill": "node scripts/backfill.mjs",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  },
+  "license": "MIT"
+}
