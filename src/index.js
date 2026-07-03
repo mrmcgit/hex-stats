@@ -18,11 +18,13 @@
 // keeps every invocation comfortably inside the free-tier CPU budget.
 
 import { collectIfNewDay, collectEthereumSince } from "./collector.js";
+import { buildLiveData } from "./livedata.js";
 
 const PULSECHAIN_FEED = "fulldatapulsechain.json";
 const ETHEREUM_FEED = "fulldata.json";
 const PULSECHAIN_META = "meta-pulsechain.json";
 const ETHEREUM_META = "meta-ethereum.json";
+const LIVEDATA = "livedata.json";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -108,9 +110,32 @@ async function runEthCollection(env) {
   await env.FEED.put(ETHEREUM_META, JSON.stringify({
     lastDay: newest.currentDay,
     updatedAt: new Date().toISOString(),
+    prev: newest,
   }));
 
   return { chain: "ethereum", appended: records.length, lastDay: newest.currentDay };
+}
+
+/// Newest record of a stored feed, parsed from the head only (no full parse).
+async function readNewestRecord(env, feedKey) {
+  const text = await env.FEED.get(feedKey, { type: "text" });
+  if (!text) return null;
+  const head = text.slice(0, 16384).trimStart();
+  const end = head.indexOf("},");
+  if (!head.startsWith("[") || end < 0) return null;
+  try { return JSON.parse(head.slice(1, end + 1)); } catch { return null; }
+}
+
+/// Rebuild the synthesized /livedata snapshot from live gas/prices and the
+/// newest record of each chain's feed.
+async function refreshLiveData(env) {
+  const pls = await readMeta(env, PULSECHAIN_META);
+  const eth = await readMeta(env, ETHEREUM_META);
+  const plsPrev = pls.prev ?? await readNewestRecord(env, PULSECHAIN_FEED);
+  const ethPrev = eth.prev ?? await readNewestRecord(env, ETHEREUM_FEED);
+  const snapshot = await buildLiveData(plsPrev, ethPrev);
+  await env.FEED.put(LIVEDATA, JSON.stringify(snapshot));
+  return snapshot;
 }
 
 /// Serve a stored feed blob as a streamed response (no parsing).
@@ -204,6 +229,12 @@ export default {
     } catch (e) {
       console.error("cron collection (ethereum) failed:", e.message);
     }
+    try {
+      await refreshLiveData(env);
+      console.log("livedata refreshed");
+    } catch (e) {
+      console.error("livedata refresh failed:", e.message);
+    }
   },
 
   async fetch(request, env, _ctx) {
@@ -219,10 +250,22 @@ export default {
       if (path === "/fulldatapulsechain") return serveFeed(env, PULSECHAIN_FEED);
       if (path === "/fulldataethereum" || path === "/fulldata") return serveFeed(env, ETHEREUM_FEED);
       if (path === "/livedata") {
-        return json(
-          { error: "livedata is not mirrored yet — use the newest /fulldatapulsechain record" },
-          501
-        );
+        // Served from the hourly-refreshed snapshot; built on demand if missing.
+        const stored = await env.FEED.get(LIVEDATA, { type: "stream" });
+        if (stored) {
+          return new Response(stored, {
+            headers: {
+              "Content-Type": "application/json",
+              "Cache-Control": "public, max-age=300",
+              ...CORS,
+            },
+          });
+        }
+        try {
+          return json(await refreshLiveData(env));
+        } catch (e) {
+          return json({ error: `livedata unavailable: ${e.message}` }, 503);
+        }
       }
       if (path === "/" || path === "/health") {
         const pls = await readMeta(env, PULSECHAIN_META);
@@ -236,7 +279,7 @@ export default {
           // Legacy top-level fields (pre-ETH-collector consumers).
           lastDay: pls.lastDay,
           updatedAt: pls.updatedAt,
-          endpoints: ["/fulldatapulsechain", "/fulldataethereum"],
+          endpoints: ["/fulldatapulsechain", "/fulldataethereum", "/livedata"],
         });
       }
     }
@@ -249,7 +292,9 @@ export default {
         try {
           const pls = await runCollection(env);
           const eth = await runEthCollection(env);
-          return json({ pulsechain: pls, ethereum: eth });
+          let livedata = "refreshed";
+          try { await refreshLiveData(env); } catch (e) { livedata = `failed: ${e.message}`; }
+          return json({ pulsechain: pls, ethereum: eth, livedata });
         } catch (e) {
           return json({ error: e.message }, 500);
         }
