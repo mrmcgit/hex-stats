@@ -7,18 +7,22 @@
 // Storage layout (Workers KV namespace `FEED` — KV is enabled on every
 // account by default, so forks deploy with zero account setup):
 //   fulldatapulsechain.json   PulseChain daily records, newest-first JSON array
-//   fulldata.json             Ethereum daily records (backfill only for now)
-//   meta-pulsechain.json      { lastDay, updatedAt, prev } small state object
+//   fulldata.json             Ethereum daily records, newest-first JSON array
+//                             (KV key keeps the legacy name; the canonical
+//                             endpoint is /fulldataethereum, /fulldata aliases)
+//   meta-pulsechain.json      { lastDay, updatedAt, prev } collector state
+//   meta-ethereum.json        { lastDay, updatedAt } collector state
 //
 // The big feed blobs are never JSON.parsed inside the Worker. Serving streams
-// the object; the daily append prepends one record with string surgery. This
+// the object; the daily append prepends records with string surgery. This
 // keeps every invocation comfortably inside the free-tier CPU budget.
 
-import { collectIfNewDay } from "./collector.js";
+import { collectIfNewDay, collectEthereumSince } from "./collector.js";
 
 const PULSECHAIN_FEED = "fulldatapulsechain.json";
 const ETHEREUM_FEED = "fulldata.json";
 const PULSECHAIN_META = "meta-pulsechain.json";
+const ETHEREUM_META = "meta-ethereum.json";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -32,9 +36,27 @@ function json(obj, status = 200, extra = {}) {
   });
 }
 
-async function readMeta(env) {
-  const meta = await env.FEED.get(PULSECHAIN_META, { type: "json" });
+async function readMeta(env, key = PULSECHAIN_META) {
+  const meta = await env.FEED.get(key, { type: "json" });
   return meta ?? { lastDay: 0, updatedAt: null, prev: null };
+}
+
+/// Prepend `recordsJson` (a comma-joined, newest-first fragment) to a stored
+/// newest-first feed array without parsing the whole blob.
+async function prependToFeed(env, feedKey, recordsJson) {
+  const text = await env.FEED.get(feedKey, { type: "text" });
+  let body;
+  if (text) {
+    const trimmed = text.trimStart();
+    if (!trimmed.startsWith("[")) throw new Error("stored feed is not a JSON array");
+    const inner = trimmed.slice(1).trimStart();
+    body = inner.startsWith("]")
+      ? `[${recordsJson}]`
+      : `[${recordsJson},${inner}`;
+  } else {
+    body = `[${recordsJson}]`;
+  }
+  await env.FEED.put(feedKey, body);
 }
 
 /// Append one newly completed day to the PulseChain feed (if there is one).
@@ -45,23 +67,7 @@ async function runCollection(env) {
     return { appended: false, lastDay: meta.lastDay, updatedAt: meta.updatedAt };
   }
 
-  const recordJson = JSON.stringify(result.record);
-
-  // Prepend to the newest-first array without parsing the whole blob.
-  const text = await env.FEED.get(PULSECHAIN_FEED, { type: "text" });
-  let body;
-  if (text) {
-    const trimmed = text.trimStart();
-    if (!trimmed.startsWith("[")) throw new Error("stored feed is not a JSON array");
-    const inner = trimmed.slice(1).trimStart();
-    body = inner.startsWith("]")
-      ? `[${recordJson}]`
-      : `[${recordJson},${inner}`;
-  } else {
-    body = `[${recordJson}]`;
-  }
-
-  await env.FEED.put(PULSECHAIN_FEED, body);
+  await prependToFeed(env, PULSECHAIN_FEED, JSON.stringify(result.record));
 
   const newMeta = {
     lastDay: result.day,
@@ -71,6 +77,40 @@ async function runCollection(env) {
   await env.FEED.put(PULSECHAIN_META, JSON.stringify(newMeta));
 
   return { appended: true, lastDay: result.day, record: result.record };
+}
+
+/// Ethereum: collect every missed day (on-chain, keyless) and prepend.
+/// First run derives lastDay from the stored feed's newest record so the
+/// gap since the upstream freeze (feed-day 2374) backfills automatically.
+async function runEthCollection(env) {
+  let meta = await env.FEED.get(ETHEREUM_META, { type: "json" });
+  if (!meta) {
+    const text = await env.FEED.get(ETHEREUM_FEED, { type: "text" });
+    let lastDay = 0;
+    if (text) {
+      const head = text.slice(0, 8192).trimStart();
+      const m = head.match(/"currentDay"\s*:\s*(\d+)/);
+      if (m) lastDay = parseInt(m[1]);
+    }
+    meta = { lastDay, updatedAt: null };
+  }
+
+  const records = await collectEthereumSince(meta.lastDay);
+  if (records.length === 0) {
+    return { chain: "ethereum", appended: 0, lastDay: meta.lastDay, updatedAt: meta.updatedAt };
+  }
+
+  // records are ascending; the feed is newest-first.
+  const fragment = records.slice().reverse().map((r) => JSON.stringify(r)).join(",");
+  await prependToFeed(env, ETHEREUM_FEED, fragment);
+
+  const newest = records[records.length - 1];
+  await env.FEED.put(ETHEREUM_META, JSON.stringify({
+    lastDay: newest.currentDay,
+    updatedAt: new Date().toISOString(),
+  }));
+
+  return { chain: "ethereum", appended: records.length, lastDay: newest.currentDay };
 }
 
 /// Serve a stored feed blob as a streamed response (no parsing).
@@ -154,9 +194,15 @@ export default {
   async scheduled(_event, env, _ctx) {
     try {
       const result = await runCollection(env);
-      console.log("cron collection:", JSON.stringify(result).slice(0, 500));
+      console.log("cron collection (pulsechain):", JSON.stringify(result).slice(0, 500));
     } catch (e) {
-      console.error("cron collection failed:", e.message);
+      console.error("cron collection (pulsechain) failed:", e.message);
+    }
+    try {
+      const result = await runEthCollection(env);
+      console.log("cron collection (ethereum):", JSON.stringify(result).slice(0, 500));
+    } catch (e) {
+      console.error("cron collection (ethereum) failed:", e.message);
     }
   },
 
@@ -166,24 +212,31 @@ export default {
 
     if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
 
-    // Public feed endpoints (drop-in compatible with hexstats.today paths)
+    // Public feed endpoints. The chains get symmetric names — neither is the
+    // implicit default. /fulldata is kept as a legacy alias of the Ethereum
+    // feed for drop-in compatibility with hexstats.today.
     if (request.method === "GET") {
       if (path === "/fulldatapulsechain") return serveFeed(env, PULSECHAIN_FEED);
-      if (path === "/fulldata") return serveFeed(env, ETHEREUM_FEED);
+      if (path === "/fulldataethereum" || path === "/fulldata") return serveFeed(env, ETHEREUM_FEED);
       if (path === "/livedata") {
         return json(
-          { error: "livedata is not mirrored yet — use /fulldatapulsechain's newest record" },
+          { error: "livedata is not mirrored yet — use the newest /fulldatapulsechain record" },
           501
         );
       }
       if (path === "/" || path === "/health") {
-        const meta = await readMeta(env);
+        const pls = await readMeta(env, PULSECHAIN_META);
+        const eth = await readMeta(env, ETHEREUM_META);
         return json({
           service: "hex-stats",
-          chain: "pulsechain",
-          lastDay: meta.lastDay,
-          updatedAt: meta.updatedAt,
-          endpoints: ["/fulldatapulsechain", "/fulldata"],
+          chains: {
+            pulsechain: { lastDay: pls.lastDay, updatedAt: pls.updatedAt },
+            ethereum: { lastDay: eth.lastDay, updatedAt: eth.updatedAt },
+          },
+          // Legacy top-level fields (pre-ETH-collector consumers).
+          lastDay: pls.lastDay,
+          updatedAt: pls.updatedAt,
+          endpoints: ["/fulldatapulsechain", "/fulldataethereum"],
         });
       }
     }
@@ -194,7 +247,9 @@ export default {
 
       if (path === "/admin/collect") {
         try {
-          return json(await runCollection(env));
+          const pls = await runCollection(env);
+          const eth = await runEthCollection(env);
+          return json({ pulsechain: pls, ethereum: eth });
         } catch (e) {
           return json({ error: e.message }, 500);
         }

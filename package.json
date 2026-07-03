@@ -10,6 +10,7 @@
     "tail": "wrangler tail"
   },
   "devDependencies": {
+    "js-sha3": "^0.9.3",
     "wrangler": "^4.0.0"
   },
   "license": "MIT"

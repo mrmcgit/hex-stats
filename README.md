@@ -31,8 +31,12 @@ No API keys, no database server, no paid services.
 | Path | Description |
 |---|---|
 | `/fulldatapulsechain` | PulseChain daily records, newest-first (kept fresh) |
-| `/fulldata` | Ethereum daily records (backfill only for now, see below) |
-| `/health` | `{ lastDay, updatedAt }` status |
+| `/fulldataethereum` | Ethereum daily records, newest-first (kept fresh) |
+| `/fulldata` | legacy alias of `/fulldataethereum` (hexstats.today compatibility) |
+| `/health` | per-chain `{ lastDay, updatedAt }` status |
+
+The two chains get symmetric endpoint names on purpose — neither is the
+implicit default.
 
 ## Deploy your own mirror
 
@@ -76,13 +80,19 @@ formulas as upstream, and prepends the record to the stored feed.
 Records collected by the mirror carry `"_mirror": true` so they are
 distinguishable from backfilled upstream records.
 
-## Ethereum status
+## How Ethereum collection works
 
 The original collector's Ethereum pipeline relied on The Graph's hosted
-service (`api.thegraph.com`), which has been decommissioned. Reviving ETH
-collection requires the decentralized Graph gateway (free API key, 100k
-queries/month) and the migrated subgraph IDs. Until then, `/fulldata` serves
-whatever was backfilled. Contributions welcome.
+service, which was decommissioned (its feed froze at day 2374). This mirror
+reads the HEX contract directly over public JSON-RPC instead — keyless:
+`currentDay()`, `globalInfo()` and `dailyDataRange(begin, end)` provide the
+payout and T-share totals for every day, so missed days backfill exactly in
+a single call. The current HEX price comes from DexScreener. Note the feed's
+day numbering: record N covers contract day N-1 (inherited from the original
+subgraph's convention); gap-backfilled records carry the payout fields (which
+drive yield math) while supply/rate/price snapshots attach to the newest
+record only, matching the original collector's behavior. Records collected
+here carry `"_mirror": true`.
 
 ## Costs
 

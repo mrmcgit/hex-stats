@@ -147,3 +147,86 @@ export async function collectIfNewDay(lastDay, prevRecord) {
   const record = await collectPulsechainDay(endDay, dailyData, prevRecord);
   return { day: endDay, record };
 }
+
+// ---------------------------------------------------------------------------
+// Ethereum collector — on-chain, keyless.
+//
+// The original project's Ethereum pipeline died with The Graph's hosted
+// service; its feed froze at feed-day 2374 (2026-06-02). This reads the HEX
+// contract directly (see onchain.js) and can therefore also BACKFILL the gap:
+// dailyDataRange returns exact payout/T-shares for every missed day in one
+// call. Supply/rate/price snapshots only exist "now", so gap records carry
+// the payout fields only (the yield-critical data); the newest record gets
+// the full snapshot, matching the original collector's run-time behavior.
+
+import {
+  getContractCurrentDay,
+  getGlobalInfo,
+  getDailyDataRange,
+  getEthereumHexPrice,
+  HEX_LAUNCH_TS,
+} from "./onchain.js";
+
+/// Collect all Ethereum feed-days after `lastDay`, up to `maxDays` per run.
+/// Returns records ASCENDING by day (caller prepends reversed), or [].
+export async function collectEthereumSince(lastDay, maxDays = 60) {
+  const contractDay = await getContractCurrentDay();
+  // Feed record N covers contract day N-1, so the newest publishable feed
+  // record equals the contract's current (in-progress) day number.
+  const targetFeedDay = contractDay;
+  if (targetFeedDay <= lastDay) return [];
+
+  const firstFeedDay = Math.max(lastDay + 1, targetFeedDay - maxDays + 1);
+  // Contract-day range [firstFeedDay-1, targetFeedDay-1], end exclusive.
+  const range = await getDailyDataRange(firstFeedDay - 1, targetFeedDay);
+
+  const records = [];
+  for (const d of range) {
+    // Zero payout = the contract hasn't lazily stored that day yet; stop so
+    // we never publish placeholder zeros (the next cron run picks them up).
+    if (d.dailyPayoutHEX <= 0 || d.totalTshares <= 0) break;
+    const feedDay = d.contractDay + 1;
+    records.push({
+      // Day boundary in UTC — matches the upstream feed's ~00:0x stamps.
+      date: new Date((HEX_LAUNCH_TS + feedDay * 86400) * 1000).toISOString(),
+      currentDay: feedDay,
+      dailyPayoutHEX: d.dailyPayoutHEX,
+      totalTshares: d.totalTshares,
+      payoutPerTshareHEX: d.dailyPayoutHEX / d.totalTshares,
+      _mirror: true,
+    });
+  }
+  if (records.length === 0) return [];
+
+  // Full snapshot (supply, T-share rate, price) is only knowable for "now";
+  // attach it to the newest record, like the original collector did.
+  const newest = records[records.length - 1];
+  try {
+    const info = await getGlobalInfo();
+    newest.stakedHEX = info.stakedHEX;
+    newest.circulatingHEX = info.circulatingHEX;
+    newest.tshareRateHEX = info.tshareRateHEX;
+    // Upstream formula (constant from the original DailyStatHandler).
+    newest.penaltiesHEX =
+      (newest.dailyPayoutHEX -
+        ((info.circulatingHEX + info.stakedHEX) * 10000) / 100448995) * 2;
+    newest.stakedHEXPercent = parseFloat(
+      ((info.stakedHEX / (info.stakedHEX + info.circulatingHEX)) * 100).toFixed(2)
+    );
+    newest.actualAPYRate = parseFloat(
+      ((newest.dailyPayoutHEX / info.stakedHEX) * 365.25 * 100).toFixed(2)
+    );
+    const price = await getEthereumHexPrice();
+    if (price) {
+      newest.priceUV2UV3 = price;
+      newest.tshareRateUSD = parseFloat((info.tshareRateHEX * price).toFixed(4));
+      newest.marketCap = price * info.circulatingHEX;
+      newest.totalValueLocked = price * info.stakedHEX;
+    }
+  } catch (e) {
+    // Payout data alone is still worth publishing; snapshot enrichment retries
+    // implicitly next day.
+    console.warn("ETH snapshot enrichment failed:", e.message);
+  }
+  return records;
+}
