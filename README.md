@@ -94,6 +94,27 @@ drive yield math) while supply/rate/price snapshots attach to the newest
 record only, matching the original collector's behavior. Records collected
 here carry `"_mirror": true`.
 
+## Fair use, rate limits, and monitoring
+
+Protection layers on the public endpoints:
+
+- **Edge caching**: responses carry `Cache-Control` (30 min for the daily
+  feeds, 5 min for `/livedata`) and are served from Cloudflare's edge cache
+  on repeat requests — please honor these headers in your client too. The
+  data changes once per day; there is nothing to gain from polling faster.
+- **Rate limiting**: 120 requests per minute per IP, after which you get
+  `429` with `Retry-After`. Honest consumers will never see it.
+- If you are building something with real traffic, **run your own mirror**
+  (five minutes, free, instructions above) — that is the whole point of this
+  project. Feel free to backfill from this instance with
+  `--source https://hexstats.chingching.xyz/...`.
+
+Operators can monitor usage in the Cloudflare dashboard (Workers & Pages →
+your worker → Metrics: requests, errors, CPU; Storage & Databases → KV:
+reads/writes) or live with `npx wrangler tail`. Consider enabling the
+"Workers Free plan daily limit" notification (dashboard → Notifications) to
+get an email before the 100k requests/day ceiling is ever near.
+
 ## Costs
 
 Free. Workers free tier (100k req/day), Workers KV free tier (1 GB storage,

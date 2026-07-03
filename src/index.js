@@ -139,6 +139,8 @@ async function refreshLiveData(env) {
 }
 
 /// Serve a stored feed blob as a streamed response (no parsing).
+/// The feeds change once per day, so a 30-minute cache TTL keeps repeat
+/// traffic on Cloudflare's edge cache instead of KV (see cached()).
 async function serveFeed(env, key) {
   const stream = await env.FEED.get(key, { type: "stream" });
   if (!stream) {
@@ -150,10 +152,23 @@ async function serveFeed(env, key) {
   return new Response(stream, {
     headers: {
       "Content-Type": "application/json",
-      "Cache-Control": "public, max-age=300",
+      "Cache-Control": "public, max-age=1800",
       ...CORS,
     },
   });
+}
+
+/// Edge-cache wrapper: repeat requests within the response's Cache-Control
+/// TTL are served from Cloudflare's cache — no Worker KV read, no origin
+/// work. This is the main defense against heavy public use.
+async function cached(request, ctx, build) {
+  const cache = caches.default;
+  const key = new Request(new URL(request.url).toString(), { method: "GET" });
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  const res = await build();
+  if (res.status === 200) ctx.waitUntil(cache.put(key, res.clone()));
+  return res;
 }
 
 /// Backfill: copy an upstream feed's bytes into KV and derive meta from the
@@ -237,7 +252,7 @@ export default {
     }
   },
 
-  async fetch(request, env, _ctx) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
 
@@ -247,25 +262,47 @@ export default {
     // implicit default. /fulldata is kept as a legacy alias of the Ethereum
     // feed for drop-in compatibility with hexstats.today.
     if (request.method === "GET") {
-      if (path === "/fulldatapulsechain") return serveFeed(env, PULSECHAIN_FEED);
-      if (path === "/fulldataethereum" || path === "/fulldata") return serveFeed(env, ETHEREUM_FEED);
+      const isFeedPath = ["/fulldatapulsechain", "/fulldataethereum", "/fulldata", "/livedata"].includes(path);
+
+      // Per-IP rate limit on the data endpoints (edge-cache hits below never
+      // reach KV, so this mostly guards runaway un-cacheable request storms).
+      if (isFeedPath && env.RATE_LIMITER) {
+        const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+        const { success } = await env.RATE_LIMITER.limit({ key: ip });
+        if (!success) {
+          return json(
+            { error: "rate limited — the feeds change once per day, please cache responses (or run your own mirror, see the README)" },
+            429,
+            { "Retry-After": "60" }
+          );
+        }
+      }
+
+      if (path === "/fulldatapulsechain") {
+        return cached(request, ctx, () => serveFeed(env, PULSECHAIN_FEED));
+      }
+      if (path === "/fulldataethereum" || path === "/fulldata") {
+        return cached(request, ctx, () => serveFeed(env, ETHEREUM_FEED));
+      }
       if (path === "/livedata") {
         // Served from the hourly-refreshed snapshot; built on demand if missing.
-        const stored = await env.FEED.get(LIVEDATA, { type: "stream" });
-        if (stored) {
-          return new Response(stored, {
-            headers: {
-              "Content-Type": "application/json",
-              "Cache-Control": "public, max-age=300",
-              ...CORS,
-            },
-          });
-        }
-        try {
-          return json(await refreshLiveData(env));
-        } catch (e) {
-          return json({ error: `livedata unavailable: ${e.message}` }, 503);
-        }
+        return cached(request, ctx, async () => {
+          const stored = await env.FEED.get(LIVEDATA, { type: "stream" });
+          if (stored) {
+            return new Response(stored, {
+              headers: {
+                "Content-Type": "application/json",
+                "Cache-Control": "public, max-age=300",
+                ...CORS,
+              },
+            });
+          }
+          try {
+            return json(await refreshLiveData(env), 200, { "Cache-Control": "public, max-age=300" });
+          } catch (e) {
+            return json({ error: `livedata unavailable: ${e.message}` }, 503);
+          }
+        });
       }
       if (path === "/" || path === "/health") {
         const pls = await readMeta(env, PULSECHAIN_META);
