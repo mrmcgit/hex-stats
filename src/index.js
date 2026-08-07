@@ -19,6 +19,7 @@
 
 import { collectIfNewDay, collectEthereumSince } from "./collector.js";
 import { buildLiveData } from "./livedata.js";
+import { servePriceHistory } from "./pricehistory.js";
 
 const PULSECHAIN_FEED = "fulldatapulsechain.json";
 const ETHEREUM_FEED = "fulldata.json";
@@ -262,7 +263,7 @@ export default {
     // implicit default. /fulldata is kept as a legacy alias of the Ethereum
     // feed for drop-in compatibility with hexstats.today.
     if (request.method === "GET") {
-      const isFeedPath = ["/fulldatapulsechain", "/fulldataethereum", "/fulldata", "/livedata"].includes(path);
+      const isFeedPath = ["/fulldatapulsechain", "/fulldataethereum", "/fulldata", "/livedata", "/pricehistory"].includes(path);
 
       // Per-IP rate limit on the data endpoints (edge-cache hits below never
       // reach KV, so this mostly guards runaway un-cacheable request storms).
@@ -304,6 +305,16 @@ export default {
           }
         });
       }
+      if (path === "/pricehistory") {
+        // Cached at the edge as well as per-token in KV: the same wallet
+        // reloaded, or two people looking at similar holdings, should not each
+        // cost an upstream round trip.
+        return cached(request, ctx, async () => {
+          const result = await servePriceHistory(env, url);
+          if (result.error) return json({ error: result.error }, result.status ?? 400);
+          return json(result, 200, { "Cache-Control": "public, max-age=3600" });
+        });
+      }
       if (path === "/" || path === "/health") {
         const pls = await readMeta(env, PULSECHAIN_META);
         const eth = await readMeta(env, ETHEREUM_META);
@@ -316,7 +327,7 @@ export default {
           // Legacy top-level fields (pre-ETH-collector consumers).
           lastDay: pls.lastDay,
           updatedAt: pls.updatedAt,
-          endpoints: ["/fulldatapulsechain", "/fulldataethereum", "/livedata"],
+          endpoints: ["/fulldatapulsechain", "/fulldataethereum", "/livedata", "/pricehistory"],
         });
       }
     }
