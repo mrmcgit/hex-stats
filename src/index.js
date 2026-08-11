@@ -20,6 +20,7 @@
 import { collectIfNewDay, collectEthereumSince } from "./collector.js";
 import { buildLiveData } from "./livedata.js";
 import { servePriceHistory } from "./pricehistory.js";
+import { serveBurns, runBurnCollection } from "./burns.js";
 
 const PULSECHAIN_FEED = "fulldatapulsechain.json";
 const ETHEREUM_FEED = "fulldata.json";
@@ -251,6 +252,14 @@ export default {
     } catch (e) {
       console.error("livedata refresh failed:", e.message);
     }
+    try {
+      // Yesterday's burns, once it is a completed UTC day. No-ops cheaply the
+      // rest of the time, like the collections above.
+      const result = await runBurnCollection(env);
+      console.log("cron burns:", JSON.stringify(result).slice(0, 300));
+    } catch (e) {
+      console.error("cron burns failed:", e.message);
+    }
   },
 
   async fetch(request, env, ctx) {
@@ -311,6 +320,15 @@ export default {
         // cost an upstream round trip.
         return cached(request, ctx, async () => {
           const result = await servePriceHistory(env, url);
+          if (result.error) return json({ error: result.error }, result.status ?? 400);
+          return json(result, 200, { "Cache-Control": "public, max-age=3600" });
+        });
+      }
+      if (path === "/burns") {
+        // A completed day never changes and the cron appends at most one more per
+        // day, so this is about as cacheable as a feed gets.
+        return cached(request, ctx, async () => {
+          const result = await serveBurns(env, url);
           if (result.error) return json({ error: result.error }, result.status ?? 400);
           return json(result, 200, { "Cache-Control": "public, max-age=3600" });
         });
