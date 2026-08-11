@@ -147,41 +147,50 @@ export async function runBurnCollection(env) {
 const SUPPLY_KEY = "burns-supply.json";
 const SUPPLY_TTL_SECONDS = 6 * 3600;
 
-/// Current circulating supply of each token, cached.
+/// PLS supply at genesis, which is a fixed historical fact rather than a live
+/// number, because PulseChain has no issuance: supply only ever falls, by the
+/// EIP-1559 burn this file measures.
 ///
-/// Served alongside the burns because "percent burned" is only meaningful against
-/// a supply, and a client holding that as a constant would drift as more is
-/// burned. PLSX is read from the token contract. PLS is a native coin with no
-/// contract to ask, so it comes from CoinGecko; if that fails the field is null
-/// and the consumer must omit the percentage rather than invent one.
-async function supplies(env) {
-  const cached = await env.FEED.get(SUPPLY_KEY, { type: "json" });
-  if (cached) return cached;
+/// Anchored rather than fetched because there is no source a Worker can reach.
+/// CoinGecko answers a laptop and returns nothing to Worker egress (its free tier
+/// blocks datacenter IPs), PulseChain's Blockscout reports market_cap 0 so supply
+/// is not derivable from price, its coinsupply action returns 0.0, and DefiLlama
+/// serves a price but no supply.
+///
+/// Derived as current supply plus everything burned up to the same moment:
+///   135,085,881,560,694  CoinGecko total_supply, read 2026-08-11
+/// + 229,664,174,590      this feed's burn total through 2026-08-10
+/// = 135,315,545,735,284
+///
+/// Anchoring GENESIS rather than "today" is the point: today drifts and would go
+/// stale, genesis does not. Current supply is derived back out as genesis minus
+/// what has burned since, so it stays correct on its own. The one inherited
+/// error is that the PLS burn is sampled rather than exact, which is under 0.2%
+/// of supply and already flagged on every row.
+///
+/// To re-derive: take a fresh total_supply and add this feed's burnedTotal as of
+/// the same day. The two should reproduce this number.
+const PLS_GENESIS_SUPPLY = 135_315_545_735_284;
 
-  let plsx = null;
-  try {
-    // totalSupply()
-    const res = await rpc("eth_call", [{ to: PLSX, data: "0x18160ddd" }, "latest"]);
-    if (res && res !== "0x") plsx = Number(BigInt(res)) / 1e18;
-  } catch {}
-
-  let pls = null;
-  try {
-    const res = await fetch(
-      "https://api.coingecko.com/api/v3/coins/pulsechain?localization=false&tickers=false&community_data=false&developer_data=false",
-      { headers: { "User-Agent": "hex-stats/1.0" } }
-    );
-    if (res.ok) {
-      const body = await res.json();
-      const total = body?.market_data?.total_supply;
-      if (typeof total === "number" && total > 0) pls = total;
-    }
-  } catch {}
-
-  const out = { plsx, pls };
-  // Only cache a complete answer, so a transient failure is not pinned for hours.
-  if (plsx && pls) await env.FEED.put(SUPPLY_KEY, JSON.stringify(out), { expirationTtl: SUPPLY_TTL_SECONDS });
-  return out;
+/// Supply figures for the percentage views. PLSX is read from its contract, which
+/// is exact and cheap; PLS is derived from the genesis anchor above.
+async function supplies(env, plsBurnedTotal) {
+  let plsx = await env.FEED.get(SUPPLY_KEY, { type: "json" });
+  if (!plsx) {
+    try {
+      // totalSupply()
+      const res = await rpc("eth_call", [{ to: PLSX, data: "0x18160ddd" }, "latest"]);
+      if (res && res !== "0x") {
+        plsx = Number(BigInt(res)) / 1e18;
+        await env.FEED.put(SUPPLY_KEY, JSON.stringify(plsx), { expirationTtl: SUPPLY_TTL_SECONDS });
+      }
+    } catch {}
+  }
+  return {
+    plsx,
+    plsGenesis: PLS_GENESIS_SUPPLY,
+    pls: Math.max(0, PLS_GENESIS_SUPPLY - (plsBurnedTotal || 0)),
+  };
 }
 
 /// GET /burns — the daily series, newest-first, plus the supply figures a
@@ -189,7 +198,9 @@ async function supplies(env) {
 export async function serveBurns(env, url) {
   const rows = (await env.FEED.get(KEY, { type: "json" })) ?? [];
   if (!rows.length) return { error: "no burn history collected yet", status: 503 };
-  const supply = await supplies(env);
+  const plsxBurnedTotalPre = rows.reduce((s, r) => s + (r.plsx || 0), 0);
+  const plsBurnedTotalPre = rows.reduce((s, r) => s + (r.pls || 0), 0);
+  const supply = await supplies(env, plsBurnedTotalPre);
 
   const days = Math.min(
     rows.length,
@@ -217,7 +228,8 @@ export async function serveBurns(env, url) {
     pls: {
       burnedTotal: plsBurnedTotal,
       currentSupply: supply.pls,
-      supplyBeforeBurns: supply.pls ? supply.pls + plsBurnedTotal : null,
+      // Genesis, not "current plus burned": see PLS_GENESIS_SUPPLY.
+      supplyBeforeBurns: supply.plsGenesis,
       estimated: true,
       note: "Estimated. EIP-1559 base-fee burn is not an event; each day is sampled across its blocks and scaled.",
     },
