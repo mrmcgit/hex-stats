@@ -21,6 +21,7 @@ import { collectIfNewDay, collectEthereumSince } from "./collector.js";
 import { buildLiveData } from "./livedata.js";
 import { servePriceHistory } from "./pricehistory.js";
 import { serveBurns, runBurnCollection } from "./burns.js";
+import { serveHolders, collectHolders } from "./holders.js";
 
 const PULSECHAIN_FEED = "fulldatapulsechain.json";
 const ETHEREUM_FEED = "fulldata.json";
@@ -260,6 +261,15 @@ export default {
     } catch (e) {
       console.error("cron burns failed:", e.message);
     }
+    try {
+      // Holder counts have no history to backfill, so every missed run is a
+      // permanent hole. Runs hourly and overwrites the same day's row, which
+      // means a single failed hour costs nothing.
+      const result = await collectHolders(env);
+      console.log("cron holders:", JSON.stringify(result).slice(0, 300));
+    } catch (e) {
+      console.error("cron holders failed:", e.message);
+    }
   },
 
   async fetch(request, env, ctx) {
@@ -331,6 +341,13 @@ export default {
           const result = await serveBurns(env, url);
           if (result.error) return json({ error: result.error }, result.status ?? 400);
           return json(result, 200, { "Cache-Control": "public, max-age=3600" });
+        });
+      }
+      if (path === "/holders") {
+        return cached(request, ctx, async () => {
+          const result = await serveHolders(env, url);
+          if (result.error) return json({ error: result.error }, result.status ?? 400);
+          return json(result, 200, { "Cache-Control": "public, max-age=1800" });
         });
       }
       if (path === "/" || path === "/health") {
